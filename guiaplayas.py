@@ -22,14 +22,15 @@
 ###
 
 import mechanize
-from BeautifulSoup import BeautifulSoup
+from bs4 import BeautifulSoup
+import json
 
 BASE_URL_TEMPLATE = 'http://aplicaciones2.magrama.es/dinamicas/guia_playas_busc/?playa=&municipio=&provincia=Todas&comunidad={CM_CODE}&bonita={CM_NAME}%2F%28Comunidad%29&pregunta={CM_CODE}&gf%5Et9100={CM_NAME}%2F%28Comunidad%29&bf%5Et9998=playa&hf%5Et9999=web3&h1%5Et3001=1&h2%5Et3002=25&id%5Et8000=4'
 
 DEFAULT_RESULTS_PER_PAGE = 25
 
-INFO_TABLE_SUMMARY="nombre y localizaci&oacute;n de la playa"
-CHAR_TABLE_SUMMARY="tabla que muestra caracter&iacute;sticas de la playa"
+INFO_TABLE_SUMMARY="nombre y localización de la playa"
+CHAR_TABLE_SUMMARY="tabla que muestra características de la playa"
 
 regions = [["CM%3DANDALUCIA", "Andalucia"],
 ["CM%3DASTURIAS", "Asturias"],
@@ -52,20 +53,46 @@ def process_beach_page(br):
     info_table = soup.table.find(summary=INFO_TABLE_SUMMARY)
     char_table = soup.table.find(summary=CHAR_TABLE_SUMMARY)
 
-    print "Playa: " + soup.table.tr.td.td.text
+    beach = dict(zip(["name","town","province","region"],[x for x in info_table.stripped_strings][:-1]))
+    char_strings = [x for x in char_table.findAll('tr') if x.text!=u'\n\xa0\n']
+
+    description = char_strings.pop(0).text.strip()
+    key = char_strings.pop(0).text.strip()
+    char = dict({key:{}})
+
+    while len(char_strings):
+        item = char_strings.pop(0)
+        if item.has_key("class") and item['class'] in (['fondoplayas2'], ['fondoplayas1']):
+            if ': ' in item.text:
+                char[key].update(dict([tuple(item.text.strip().split(': ', 1))]))
+            else:
+                text = item.text.strip()
+                char[key].update({text:text})
+        else:
+            key = item.text.strip()
+            char[key] = {}
+
+    beach["characteristics"] = char
+    return beach
 
 def process_result_page(br, page_results):
+    beaches_data = []
+
     form_index = 0
     while form_index < page_results:
         br.select_form(nr=form_index)
         if br.form.method == 'POST':
             br.submit()
-            process_beach_page(br)
+            beaches_data.append(process_beach_page(br))
             br.back()
         form_index += 1
 
+    return beaches_data
+
 if __name__ == '__main__':
     br = mechanize.Browser()
+
+    beaches_data = []
 
     for region in regions:
         region_url = BASE_URL_TEMPLATE.replace('{CM_CODE}', region[0])
@@ -78,8 +105,8 @@ if __name__ == '__main__':
         total_results = int(soup.table.td.getText().split('registros')[0].split(': ')[1])
 
         for current_page_results in [DEFAULT_RESULTS_PER_PAGE] * (total_results/DEFAULT_RESULTS_PER_PAGE):
-            process_result_page(br, current_page_results)
+            beaches_data += process_result_page(br, current_page_results)
             br.select_form(name='formsiguientes')
             br.submit()
 
-        process_result_page(br, total_results % DEFAULT_RESULTS_PER_PAGE)
+        beaches_data += process_result_page(br, total_results % DEFAULT_RESULTS_PER_PAGE)
